@@ -1,6 +1,14 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Install system deps required to build some Python packages (uvloop, httptools, etc.)
+# Set environment
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8000
+
+# Create app directory
+WORKDIR /app
+
+# Install system build deps required to build any wheels (will be removed after)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        build-essential \
@@ -8,32 +16,31 @@ RUN apt-get update \
        libffi-dev \
        libssl-dev \
        ca-certificates \
-       curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user and working directory
-ENV APP_USER=app
-ENV APP_HOME=/app
-RUN useradd --system --create-home --home-dir ${APP_HOME} ${APP_USER}
-WORKDIR ${APP_HOME}
+# Copy dependency specification first for better caching
+COPY requirements.txt ./requirements.txt
 
-# Ensure pip is up-to-date and use deterministic installs from requirements.txt
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+# Upgrade pip, install wheel and pinned dependencies
+RUN python -m pip install --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy application source and set permissions
-COPY --chown=${APP_USER}:${APP_USER} . ${APP_HOME}
-
-# Drop build tools to reduce image size
-USER root
-RUN apt-get update \
-    && apt-get purge -y --auto-remove build-essential gcc \
+# Remove build dependencies to keep image slim
+RUN apt-get purge -y --auto-remove build-essential gcc libffi-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Switch to non-root user
-USER ${APP_USER}
+# Copy application code
+COPY . /app
 
-# Expose the application port and run the app bound to 0.0.0.0
+# Create a non-root user and give ownership of the app directory
+RUN groupadd --gid 1000 appgroup \
+    && useradd --uid 1000 --gid appgroup --home-dir /home/appuser --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appgroup /app
+
+USER appuser
+
+# Expose expected FastAPI/Uvicorn port
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Run the app, binding to 0.0.0.0
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
