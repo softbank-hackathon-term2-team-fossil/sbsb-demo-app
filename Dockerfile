@@ -3,39 +3,34 @@ FROM python:3.11-slim
 # Set environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    APP_USER=app \
+    APP_HOME=/app \
     PORT=8000
 
-# Create a non-root user and app directory
-RUN groupadd --gid 1000 appgroup \
-    && useradd --uid 1000 --gid appgroup --shell /bin/false --create-home appuser
+# Create application user and directory
+RUN adduser --disabled-password --gecos "" --home "${APP_HOME}" "${APP_USER}"
+WORKDIR ${APP_HOME}
 
-WORKDIR /app
+# Install build dependencies, install python packages, then remove build deps to keep image small
+# Use deterministic pip install from requirements.txt (versions pinned in file)
+COPY requirements.txt ./
 
-# Install runtime and build dependencies required for some uvicorn extras (then clean)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       build-essential \
-       gcc \
-       libc-dev \
-       libssl-dev \
-       libffi-dev \
-       ca-certificates \
-       wget \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        libffi-dev \
+        ca-certificates \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --disable-pip-version-check -r requirements.txt \
+    && apt-get purge -y --auto-remove build-essential gcc libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install pip packages deterministically from requirements.txt
-# Copy only requirements first to leverage Docker layer caching
-COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r /app/requirements.txt
-
 # Copy application code
-COPY --chown=appuser:appgroup . /app
+COPY --chown=${APP_USER}:${APP_USER} . ${APP_HOME}
 
-# Switch to non-root user
-USER appuser
+# Expose inferred app port and switch to non-root user
+EXPOSE ${PORT}
+USER ${APP_USER}
 
-# Expose application port and run Uvicorn, binding to 0.0.0.0
-EXPOSE 8000
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the app binding to 0.0.0.0
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
