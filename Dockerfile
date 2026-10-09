@@ -1,36 +1,50 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bullseye
 
-# Set environment
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    APP_USER=app \
-    APP_HOME=/app \
-    PORT=8000
+# Set a deterministic working directory
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH=/home/app/.local/bin:$PATH
 
-# Create application user and directory
-RUN adduser --disabled-password --gecos "" --home "${APP_HOME}" "${APP_USER}"
-WORKDIR ${APP_HOME}
+WORKDIR /app
 
-# Install build dependencies, install python packages, then remove build deps to keep image small
-# Use deterministic pip install from requirements.txt (versions pinned in file)
-COPY requirements.txt ./
+# Install runtime dependencies required to build any wheels, then cleanup after pip install
+# Use apt only where necessary and remove build deps afterwards to keep image small
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      gcc \
+      libffi-dev \
+      ca-certificates \
+      curl && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        gcc \
-        libffi-dev \
-        ca-certificates \
-    && python -m pip install --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir --disable-pip-version-check -r requirements.txt \
-    && apt-get purge -y --auto-remove build-essential gcc libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Create a non-root user and ensure ~/.local exists for --user installs if needed
+RUN useradd --create-home --shell /bin/bash app && \
+    mkdir -p /app && chown -R app:app /app
+
+# Copy dependency manifest first for better layer caching
+COPY --chown=app:app requirements.txt /app/requirements.txt
+
+# Install Python dependencies as the non-root user to avoid needing root at runtime
+USER app
+RUN python -m pip install --upgrade pip setuptools wheel && \
+    python -m pip install --no-cache-dir -r /app/requirements.txt
+
+# Switch back to root to remove build deps and cleanup apt caches
+USER root
+RUN apt-get update && \
+    apt-get remove -y --purge build-essential gcc libffi-dev && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy application code
-COPY --chown=${APP_USER}:${APP_USER} . ${APP_HOME}
+COPY --chown=app:app . /app
 
-# Expose inferred app port and switch to non-root user
-EXPOSE ${PORT}
-USER ${APP_USER}
+# Use non-root user for runtime
+USER app
 
-# Run the app binding to 0.0.0.0
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+# FastAPI default port
+EXPOSE 8000
+
+# Bind to 0.0.0.0 so container is reachable from outside
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
