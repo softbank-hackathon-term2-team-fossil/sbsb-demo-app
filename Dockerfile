@@ -1,36 +1,39 @@
 FROM python:3.12-slim-bookworm
 
-# Create a non-root user and group
-ARG APP_USER=app
-ARG APP_UID=1000
-RUN groupadd --gid ${APP_UID} ${APP_USER} \
-    && useradd --uid ${APP_UID} --gid ${APP_UID} --home /home/${APP_USER} --create-home --shell /bin/bash ${APP_USER}
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    VENV_PATH=/opt/venv \
-    PATH=/opt/venv/bin:$PATH \
-    PORT=8000
-
-# Install a contained virtualenv for deterministic installs
-RUN python -m venv $VENV_PATH \
-    && $VENV_PATH/bin/python -m pip install --upgrade pip setuptools wheel
-
+# Set a working directory
 WORKDIR /app
 
-# Copy and install only dependencies first to leverage layer caching
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Environment
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/home/app/.local/bin:${PATH}" \
+    UVICORN_HOST=0.0.0.0 \
+    UVICORN_PORT=8000 \
+    UVICORN_WORKERS=1
 
-# Copy application source
-COPY main.py ./
+# Create non-root user
+RUN groupadd -g 1000 app \
+ && useradd -m -u 1000 -g app -s /bin/bash app
 
-# Ensure app directory is owned by non-root user
-RUN chown -R ${APP_USER}:${APP_USER} /app
+# Copy only what we need for dependency installation first (layer caching)
+COPY requirements.txt .
 
+# Install dependencies as the non-root user into --user site to avoid needing root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && pip install --no-cache-dir --user -r requirements.txt \
+ && find /root/.cache -type f -delete || true
+
+# Copy application code
+COPY --chown=app:app . .
+
+# Switch to non-root user
+USER app
+
+# Expose inferred application port
 EXPOSE 8000
 
-USER ${APP_USER}
-
-# Bind to 0.0.0.0 and use PORT env var; keep single worker for predictable resource usage
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "auto", "--proxy-headers", "--workers", "1"]
+# Run the app; allow overriding CMD at runtime
+CMD ["sh", "-c", "exec uvicorn main:app --host ${UVICORN_HOST} --port ${UVICORN_PORT} --workers ${UVICORN_WORKERS} --loop auto --http auto"]
