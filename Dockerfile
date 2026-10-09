@@ -1,30 +1,35 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.11-slim
 
-# Prevent Python from writing .pyc files and enable stdout/stderr buffering
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=8000
+# Set environment
+ENV PYTHONUNBUFFERED=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Create a non-root user and app directory
-RUN useradd --no-log-init --home /app --create-home app
+RUN groupadd --gid 1000 appgroup \
+ && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser \
+ && mkdir -p /app \
+ && chown appuser:appgroup /app
+
 WORKDIR /app
 
-# Install pip dependencies deterministically from requirements.txt
-# Copy only requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies deterministically
+# Copy only requirements first for layer caching
+COPY requirements.txt /app/requirements.txt
+
+# Use --no-cache-dir and constrained installs from pinned requirements.txt
+RUN pip install --upgrade pip setuptools wheel \
+ && pip install --no-cache-dir --upgrade -r /app/requirements.txt
 
 # Copy application code
-COPY . .
-
-# Ensure app directory ownership for non-root user
-RUN chown -R app:app /app
+COPY --chown=appuser:appgroup . /app
 
 # Switch to non-root user
-USER app
+USER appuser
 
-# Expose the application's port
+# Expose inferred port and run the app bound to 0.0.0.0
 EXPOSE 8000
 
-# Start the app with uvicorn, binding to 0.0.0.0
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use uvicorn as the entrypoint; keep a single worker for predictable memory usage in slim image
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
