@@ -1,32 +1,28 @@
 FROM python:3.12-slim-bookworm
 
-# Metadata
-LABEL org.opencontainers.image.title="banchan Workspace (FastAPI)"
-LABEL org.opencontainers.image.description="FastAPI app serving a static homepage and /health endpoint"
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PORT=8000
-
-# Create app user and group
-RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home --shell /bin/false app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Copy only dependencies first for layer caching
-COPY requirements.txt /app/requirements.txt
+# Create a lightweight virtual environment for deterministic installs and isolation
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip setuptools wheel \
+    && adduser --disabled-password --gecos "" appuser \
+    && chown -R appuser:appuser /opt/venv
 
 # Install Python dependencies deterministically from requirements.txt
-# Avoid installing extra OS packages; rely on prebuilt wheels where possible.
-RUN python -m pip install --upgrade pip setuptools && \
-    python -m pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /app/requirements.txt
 
 # Copy application code
-COPY --chown=app:app main.py /app/
+COPY . /app
+RUN chown -R appuser:appuser /app
 
-# Use non-root user
-USER app
+USER appuser
 
-# Expose inferred app port and bind to 0.0.0.0 in CMD
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "auto", "--workers", "1"]
+# Bind to 0.0.0.0 so the server is accessible from outside the container
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
