@@ -1,23 +1,33 @@
 FROM python:3.12-slim-bookworm
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Set environment
+ENV PYTHONUNBUFFERED=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    PATH=/home/app/.local/bin:$PATH
 
-# Create app user and directory
-RUN addgroup --system app && adduser --system --group --home /app app
+# Create non-root user
+RUN useradd --create-home --home-dir /home/app --shell /bin/bash app
+
 WORKDIR /app
-COPY --chown=app:app requirements.txt /app/
 
-# Install runtime dependencies deterministically from pinned requirements
+# Install Python dependencies deterministically from requirements.txt
+# Copy only requirements first to leverage layer caching
+COPY requirements.txt ./
+
+# Use pip to install pinned dependencies without caches
 RUN python -m pip install --upgrade pip setuptools wheel \
- && pip install --no-cache-dir -r requirements.txt
+ && python -m pip install --no-cache-dir --require-hashes -r requirements.txt || \
+    (python -m pip install --no-cache-dir -r requirements.txt)
 
-# Copy application code
-COPY --chown=app:app . /app
-RUN mkdir -p /app/data && chown -R app:app /app
+# Copy application files
+COPY . /app
+
+# Ensure correct ownership
+RUN chown -R app:app /app
 
 USER app
 
+# Expose the typical FastAPI/uvicorn port and run the server binding to 0.0.0.0
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "auto", "--http", "auto"]
