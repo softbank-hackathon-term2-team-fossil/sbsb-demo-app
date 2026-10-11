@@ -1,33 +1,31 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.11-slim-bookworm
 
-# Set environment
+# Create app user and directory
 ENV PYTHONUNBUFFERED=1 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    PATH=/home/app/.local/bin:$PATH
+    PYTHONDONTWRITEBYTECODE=1 \
+    APP_HOME=/app \
+    PORT=8000
 
-# Create non-root user
-RUN useradd --create-home --home-dir /home/app --shell /bin/bash app
+RUN addgroup --system app && adduser --system --ingroup app --home ${APP_HOME} app
 
-WORKDIR /app
+WORKDIR ${APP_HOME}
 
-# Install Python dependencies deterministically from requirements.txt
-# Copy only requirements first to leverage layer caching
-COPY requirements.txt ./
+# Copy only requirements first for better caching
+COPY requirements.txt .
 
-# Use pip to install pinned dependencies without caches
+# Use deterministic, cached-less pip install; prefer binary wheels when available
 RUN python -m pip install --upgrade pip setuptools wheel \
- && python -m pip install --no-cache-dir --require-hashes -r requirements.txt || \
-    (python -m pip install --no-cache-dir -r requirements.txt)
+    && python -m pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Copy application files
-COPY . /app
+# Copy application source
+COPY . .
 
-# Ensure correct ownership
-RUN chown -R app:app /app
+# Ensure app directory ownership is correct for non-root user
+RUN chown -R app:app ${APP_HOME}
 
 USER app
 
-# Expose the typical FastAPI/uvicorn port and run the server binding to 0.0.0.0
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "auto", "--http", "auto"]
+# Use uvicorn to bind to 0.0.0.0; keep single worker for lightweight SQLite usage
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

@@ -38,8 +38,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            banchani/sbsb-images:softbank-hackathon-term2-team-fossil-sbsb-demo-app-ee0ec7cb-${{ github.sha }}
-            banchani/sbsb-images:softbank-hackathon-term2-team-fossil-sbsb-demo-app-ee0ec7cb-latest
+            kimhyoyeon/sbsb-images:softbank-hackathon-term2-team-fossil-sbsb-demo-app-ee0ec7cb-${{ github.sha }}
+            kimhyoyeon/sbsb-images:softbank-hackathon-term2-team-fossil-sbsb-demo-app-ee0ec7cb-latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
